@@ -1,0 +1,11 @@
+# Explicit npm publish filter.
+# Keep runtime artifacts required by launcher package.
+*
+!README.md
+!package.json
+!fencode.cmd
+!fencode.ps1
+!bin/**
+!docs/fcode-server-agent-loop.md
+!fcode-server/dist/**
+!web-ui/.next-v2/standalone/**

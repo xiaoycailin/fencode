@@ -1,0 +1,31 @@
+{
+  "name": "@aiden2209/fencode",
+  "version": "0.1.5",
+  "private": false,
+  "description": "FenCode launcher CLI for local app server + web UI lifecycle",
+  "license": "UNLICENSED",
+  "bin": {
+    "fencode": "bin/fencode.js"
+  },
+  "files": [
+    "bin/",
+    "fencode.cmd",
+    "fencode.ps1",
+    "fcode-server/dist/",
+    "runtime/fcode-server/dist/",
+    "web-ui/.next-v2/standalone/",
+    "docs/fcode-server-agent-loop.md",
+    "README.md"
+  ],
+  "dependencies": {
+    "better-sqlite3": "^12.10.0"
+  },
+  "scripts": {
+    "build": "npm run build --prefix fcode-server && npm run build --prefix web-ui && node ./bin/fencode-prepare-package.js",
+    "fencode": "node ./bin/fencode.js",
+    "fencode:start": "node ./bin/fencode.js start",
+    "fencode:stop": "node ./bin/fencode.js stop",
+    "fencode:restart": "node ./bin/fencode.js restart",
+    "prepack": "node ./bin/fencode-prepare-package.js"
+  }
+}
