@@ -1,7 +1,8 @@
 "use client";
 
 import { ChevronDown, FileDiff, RotateCcw } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
+import { extractCodeInnerHtml, highlightCodeToHtml } from "@/lib/codeTheme";
 import type { AgentEvent } from "@/types/events";
 
 type EditedFile = {
@@ -19,7 +20,7 @@ type DiffLine = {
   text: string;
 };
 
-export function EditedFilesSummary({ events }: { events: AgentEvent[] }) {
+export function EditedFilesSummary({ events, workspacePath }: { events: AgentEvent[]; workspacePath?: string }) {
   const files = useMemo(
     () =>
       events
@@ -27,15 +28,19 @@ export function EditedFilesSummary({ events }: { events: AgentEvent[] }) {
         .map((event) => {
           const payload = event.payload as { path?: string; diff?: string; additions?: number; deletions?: number };
           const path = String(payload.path ?? "unknown");
+          const diff = String(payload.diff ?? "");
+          const parsedLines = parseUnifiedDiff(diff);
+          const lines = parsedLines.length ? parsedLines : fallbackLinesFromDiff(diff, Number(payload.additions ?? 0), Number(payload.deletions ?? 0));
+          const inferred = inferDisplayCounts(diff, Number(payload.additions ?? 0), Number(payload.deletions ?? 0), lines);
           return {
             path,
-            additions: Number(payload.additions ?? 0),
-            deletions: Number(payload.deletions ?? 0),
-            lines: parseUnifiedDiff(String(payload.diff ?? "")),
+            additions: inferred.additions,
+            deletions: inferred.deletions,
+            lines,
             language: languageFromPath(path),
           };
         })
-        .filter((file) => file.lines.length),
+        .filter((file) => file.lines.length || file.additions > 0 || file.deletions > 0),
     [events],
   );
 
@@ -67,15 +72,16 @@ export function EditedFilesSummary({ events }: { events: AgentEvent[] }) {
       </summary>
       <div className="edited-files-body">
         {files.map((file, index) => (
-          <EditedFileBlock key={`${file.path}-${index}`} file={file} />
+          <EditedFileBlock key={`${file.path}-${index}`} file={file} workspacePath={workspacePath} />
         ))}
       </div>
     </details>
   );
 }
 
-function EditedFileBlock({ file }: { file: EditedFile }) {
+const EditedFileBlock = memo(function EditedFileBlock({ file, workspacePath }: { file: EditedFile; workspacePath?: string }) {
   const [highlighted, setHighlighted] = useState<string[]>([]);
+  const [numberedLines, setNumberedLines] = useState(file.lines);
   const [isDark, setIsDark] = useState(true);
   useEffect(() => {
     const refresh = () => setIsDark(document.documentElement.classList.contains("dark"));
@@ -86,18 +92,29 @@ function EditedFileBlock({ file }: { file: EditedFile }) {
   }, []);
 
   useEffect(() => {
+    setNumberedLines(file.lines);
+    if (!workspacePath || file.lines.every((line) => line.lineNo)) return;
+    const params = new URLSearchParams({ root: workspacePath, path: file.path });
     let cancelled = false;
-    const lines = file.lines.map((line) => line.text || " ");
-    void import("shiki")
-      .then(({ codeToHtml }) => Promise.all(lines.map((line) =>
-        codeToHtml(line, {
-          lang: file.language,
-          theme: isDark ? "github-dark" : "github-light",
-        }),
-      )))
-      .then((htmlLines) => {
+    void fetch(`/api/workspace/file?${params.toString()}`, { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data: { content?: string } | null) => {
+        if (cancelled || !data?.content) return;
+        setNumberedLines(assignLineNumbersFromContent(file.lines, data.content));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [file.lines, file.path, workspacePath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const code = numberedLines.map((line) => line.text || " ").join("\n");
+    void highlightCodeToHtml(code, file.language, isDark)
+      .then((html) => {
         if (cancelled) return;
-        setHighlighted(htmlLines.map(extractCodeInnerHtml));
+        setHighlighted(extractCodeInnerHtml(html).split(/\r?\n/));
       })
       .catch(() => {
         if (!cancelled) setHighlighted([]);
@@ -105,7 +122,7 @@ function EditedFileBlock({ file }: { file: EditedFile }) {
     return () => {
       cancelled = true;
     };
-  }, [file.language, file.lines, isDark]);
+  }, [file.language, numberedLines, isDark]);
 
   return (
     <details className="edited-file-block">
@@ -118,7 +135,7 @@ function EditedFileBlock({ file }: { file: EditedFile }) {
         </span>
       </summary>
       <div className="edited-diff-code" role="table" aria-label={`Diff for ${file.path}`}>
-        {file.lines.map((line, index) => (
+        {(numberedLines.length ? numberedLines : [{ kind: "context", sign: " ", text: "Diff preview unavailable" } as DiffLine]).map((line, index) => (
           <div key={`${line.kind}-${index}-${line.lineNo ?? ""}`} className={`edited-diff-line ${line.kind}`} role="row">
             <span className={`edited-diff-sign ${line.kind}`}>{line.sign}</span>
             <span className="edited-diff-num">{line.lineNo ?? ""}</span>
@@ -132,28 +149,30 @@ function EditedFileBlock({ file }: { file: EditedFile }) {
       </div>
     </details>
   );
-}
+});
 
 function parseUnifiedDiff(diff: string): DiffLine[] {
   const output: DiffLine[] = [];
   let oldLine = 0;
   let newLine = 0;
+  let hasHunk = false;
 
   for (const rawLine of diff.split(/\r?\n/)) {
     if (!rawLine || rawLine.startsWith("diff --git") || rawLine.startsWith("index ") || rawLine.startsWith("--- ") || rawLine.startsWith("+++ ")) continue;
     const hunk = rawLine.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunk) {
+      hasHunk = true;
       oldLine = Number(hunk[1]);
       newLine = Number(hunk[2]);
       continue;
     }
     if (rawLine.startsWith("+")) {
-      output.push({ kind: "add", lineNo: newLine, sign: "+", text: rawLine.slice(1) });
+      output.push({ kind: "add", lineNo: hasHunk ? newLine : undefined, sign: "+", text: rawLine.slice(1) });
       newLine += 1;
       continue;
     }
     if (rawLine.startsWith("-")) {
-      output.push({ kind: "remove", lineNo: oldLine, sign: "-", text: rawLine.slice(1) });
+      output.push({ kind: "remove", lineNo: hasHunk ? oldLine : undefined, sign: "-", text: rawLine.slice(1) });
       oldLine += 1;
       continue;
     }
@@ -162,6 +181,41 @@ function parseUnifiedDiff(diff: string): DiffLine[] {
   }
 
   return output;
+}
+
+function fallbackLinesFromDiff(diff: string, additions: number, deletions: number): DiffLine[] {
+  const lines = diff
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line && !line.startsWith("diff --git") && !line.startsWith("index "));
+  const output: DiffLine[] = [];
+  for (const line of lines) {
+    if (line.startsWith("+++ ") || line.startsWith("--- ") || line.startsWith("@@")) continue;
+    if (line.startsWith("+")) {
+      output.push({ kind: "add", sign: "+", text: line.slice(1) });
+      continue;
+    }
+    if (line.startsWith("-")) {
+      output.push({ kind: "remove", sign: "-", text: line.slice(1) });
+      continue;
+    }
+  }
+  if (output.length) return output;
+  if (diff.trim()) return [{ kind: "context", sign: " ", text: diff.trim().slice(0, 500) }];
+  if (additions > 0 || deletions > 0) return [{ kind: additions > 0 ? "add" : "remove", sign: additions > 0 ? "+" : "-", text: "Diff preview unavailable" }];
+  return [];
+}
+
+function inferDisplayCounts(diff: string, additions: number, deletions: number, lines: DiffLine[]) {
+  if (additions > 0 || deletions > 0) return { additions, deletions };
+  const addFromSigns = diff.split(/\r?\n/).filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
+  const delFromSigns = diff.split(/\r?\n/).filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
+  if (addFromSigns > 0 || delFromSigns > 0) return { additions: addFromSigns, deletions: delFromSigns };
+  const addFromLines = lines.filter((line) => line.kind === "add").length;
+  const delFromLines = lines.filter((line) => line.kind === "remove").length;
+  if (addFromLines > 0 || delFromLines > 0) return { additions: addFromLines, deletions: delFromLines };
+  if (lines.length > 0) return { additions: lines.length, deletions: 0 };
+  return { additions: 0, deletions: 0 };
 }
 
 function languageFromPath(path: string) {
@@ -189,9 +243,22 @@ function languageFromPath(path: string) {
   return map[ext] ?? "text";
 }
 
-function extractCodeInnerHtml(shikiHtml: string) {
-  const matched = shikiHtml.match(/<code[^>]*>([\s\S]*?)<\/code>/i);
-  return matched?.[1] ?? escapeHtml(shikiHtml);
+function assignLineNumbersFromContent(lines: DiffLine[], content: string): DiffLine[] {
+  const source = content.split(/\r?\n/);
+  let cursor = 0;
+  return lines.map((line) => {
+    if (line.lineNo) return line;
+    if (line.kind !== "add" && line.kind !== "context") return line;
+    const target = line.text.trim();
+    if (!target) return line;
+    for (let index = cursor; index < source.length; index += 1) {
+      if (source[index].trim() === target) {
+        cursor = index + 1;
+        return { ...line, lineNo: index + 1 };
+      }
+    }
+    return line;
+  });
 }
 
 function escapeHtml(input: string) {

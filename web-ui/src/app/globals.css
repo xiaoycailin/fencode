@@ -507,6 +507,7 @@ button:disabled {
   min-width: 0;
   flex-direction: column;
   gap: 22px;
+  contain: layout style;
 }
 
 .context-compact-bar {
@@ -743,6 +744,8 @@ button:disabled {
   min-width: 0;
   flex-direction: column;
   gap: 10px;
+  content-visibility: auto;
+  contain-intrinsic-size: 420px;
 }
 
 .todo-progress-panel {
@@ -1120,6 +1123,11 @@ details[open] .activity-chevron {
   gap: 10px;
 }
 
+.edited-file-stat {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
 .edited-files-title strong {
   display: block;
   color: var(--text);
@@ -1200,10 +1208,11 @@ details[open] .activity-chevron {
   overflow: auto;
   max-height: 280px;
   border-top: 1px solid var(--border);
-  background: #111111;
+  background: #171812;
   font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11.5px;
   line-height: 1.45;
+  will-change: scroll-position;
 }
 
 .edited-diff-line {
@@ -1218,7 +1227,7 @@ details[open] .activity-chevron {
   display: block;
   min-width: max-content;
   padding: 0 12px 0 10px;
-  color: #e5e7eb;
+  color: #f8f8f2;
   white-space: pre;
 }
 
@@ -1233,13 +1242,13 @@ details[open] .activity-chevron {
 }
 
 .edited-diff-sign.add {
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.34);
+  color: #7dff9b;
+  background: rgba(34, 197, 94, 0.18);
 }
 
 .edited-diff-sign.remove {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.34);
+  color: #ff8a8a;
+  background: rgba(239, 68, 68, 0.2);
 }
 
 .edited-diff-num {
@@ -1255,7 +1264,7 @@ details[open] .activity-chevron {
 }
 
 .edited-diff-line.meta {
-  background: #161616;
+  background: #1d1e17;
 }
 
 .edited-diff-line.meta code {
@@ -1263,25 +1272,43 @@ details[open] .activity-chevron {
 }
 
 .edited-diff-line.add {
-  background: rgba(34, 197, 94, 0.18);
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.16), rgba(34, 197, 94, 0.055));
 }
 
-.edited-diff-line.add .edited-diff-num,
-.edited-diff-line.add code {
-  color: #dcfce7;
+.edited-diff-line.add .edited-diff-num {
+  color: #86efac;
 }
 
 .edited-diff-line.remove {
-  background: rgba(239, 68, 68, 0.17);
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.17), rgba(239, 68, 68, 0.055));
 }
 
-.edited-diff-line.remove .edited-diff-num,
-.edited-diff-line.remove code {
-  color: #fee2e2;
+.edited-diff-line.remove .edited-diff-num {
+  color: #fca5a5;
 }
 
 .edited-diff-line.context {
-  background: #101010;
+  background: #171812;
+}
+
+:root:not(.dark) .edited-diff-code {
+  background: #fffdf7;
+}
+
+:root:not(.dark) .edited-diff-line code {
+  color: #2d2a2e;
+}
+
+:root:not(.dark) .edited-diff-line.context {
+  background: #fffdf7;
+}
+
+:root:not(.dark) .edited-diff-line.add {
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.13), rgba(34, 197, 94, 0.04));
+}
+
+:root:not(.dark) .edited-diff-line.remove {
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.13), rgba(239, 68, 68, 0.04));
 }
 
 .activity-thinking svg {

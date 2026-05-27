@@ -1,12 +1,13 @@
 "use client";
 
 import { Check, Copy } from "lucide-react";
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { highlightCodeToHtml, normalizeCodeLanguage } from "@/lib/codeTheme";
 import { cleanDisplayText } from "@/lib/text";
 
-export function MarkdownMessage({ text }: { text: string }) {
+export const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }) {
   return (
     <div className="markdown">
       <ReactMarkdown
@@ -32,7 +33,7 @@ export function MarkdownMessage({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 function cleanMentionChildren(children: React.ReactNode) {
   if (typeof children === "string") return children.replace(/^[/@]/, "");
@@ -68,11 +69,7 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     setHighlighted("");
     if (!raw.trim()) return;
-    void import("shiki")
-      .then(({ codeToHtml }) => codeToHtml(raw.replace(/\n$/, ""), {
-        lang: language,
-        theme: isDark ? "github-dark" : "github-light",
-      }))
+    void highlightCodeToHtml(raw.replace(/\n$/, ""), language, isDark)
       .then((html) => {
         if (!cancelled) setHighlighted(html);
       })
@@ -108,21 +105,6 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
       )}
     </div>
   );
-}
-
-function normalizeCodeLanguage(value: string) {
-  const normalized = value.toLowerCase() || "text";
-  const aliases: Record<string, string> = {
-    ps: "powershell",
-    ps1: "powershell",
-    shell: "bash",
-    sh: "bash",
-    rs: "rust",
-    ts: "typescript",
-    js: "javascript",
-    py: "python",
-  };
-  return aliases[normalized] ?? normalized;
 }
 
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {

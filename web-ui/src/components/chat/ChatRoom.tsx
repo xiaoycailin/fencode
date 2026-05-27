@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { useState } from "react";
 import { ChevronDown, Copy, MessageSquarePlus, Quote } from "lucide-react";
 import { ActivityFeed } from "./ActivityFeed";
@@ -35,6 +35,8 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const chatColumnRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+  const showJumpToBottomRef = useRef(false);
   const hasInitialAutoScrollRef = useRef(false);
   const pendingInitialAutoScrollRef = useRef(false);
   const onEvents = useCallback((batch: Parameters<typeof applyEvents>[0]) => {
@@ -50,14 +52,25 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
     const container = getScrollContainer();
     if (!container) return;
     const distanceFromBottom = container.scrollHeight - (container.scrollTop + container.clientHeight);
-    setShowJumpToBottom(distanceFromBottom > 220);
+    const next = distanceFromBottom > 220;
+    if (showJumpToBottomRef.current !== next) {
+      showJumpToBottomRef.current = next;
+      setShowJumpToBottom(next);
+    }
   }, [getScrollContainer]);
-  const scrollToBottom = useCallback(() => {
+  const scheduleScrollStateUpdate = useCallback(() => {
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      updateScrollState();
+    });
+  }, [updateScrollState]);
+  const scrollToBottom = useCallback((smooth = false) => {
     const container = getScrollContainer();
     if (!container) return;
-    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-    window.setTimeout(updateScrollState, 180);
-  }, [getScrollContainer, updateScrollState]);
+    container.scrollTo({ top: container.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    scheduleScrollStateUpdate();
+  }, [getScrollContainer, scheduleScrollStateUpdate]);
 
   useEffect(() => {
     hydrateSession(detail.messages, detail.events, detail.session.status);
@@ -86,9 +99,15 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
     updateScrollState();
     const container = getScrollContainer();
     if (!container) return;
-    container.addEventListener("scroll", updateScrollState, { passive: true });
-    return () => container.removeEventListener("scroll", updateScrollState);
-  }, [getScrollContainer, updateScrollState]);
+    container.addEventListener("scroll", scheduleScrollStateUpdate, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", scheduleScrollStateUpdate);
+      if (scrollRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, [getScrollContainer, scheduleScrollStateUpdate, updateScrollState]);
 
   useEffect(() => {
     if (!pendingInitialAutoScrollRef.current || !endRef.current) return;
@@ -156,9 +175,12 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
       }
     }
     void refreshChangeSummary();
-    const timer = window.setInterval(() => void refreshChangeSummary(), 5000);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void refreshChangeSummary();
+    }, 15000);
     return () => window.clearInterval(timer);
-  }, [events.length, session.workspacePath]);
+  }, [session.workspacePath]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -292,51 +314,75 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
 
   const hasChanges = (changeSummary?.changedFiles ?? 0) > 0 || events.some((event) => event.type.startsWith("file."));
   const modelContextWindow = models.find((model) => model.id === session.model)?.contextWindow ?? session.contextWindow ?? 128000;
-  const latestCompactMarker = [...messages]
-    .reverse()
-    .find((message) => message.role === "system" && /context compacted/i.test(message.content));
-  const compactedMessages = latestCompactMarker
-    ? messages.filter((message) => message.createdAt >= latestCompactMarker.createdAt)
-    : messages;
-  const compactedEvents = latestCompactMarker
-    ? events.filter((event) => event.timestamp >= latestCompactMarker.createdAt)
-    : events;
-  const derivedJoined = [
-    session.compactSummary ?? "",
-    ...compactedMessages.map((message) => `${message.role}: ${message.content}`),
-    ...compactedEvents.slice(-320).map((event) => `${event.type} ${JSON.stringify(event.payload)}`),
-    streamingText ? `assistant: ${streamingText}` : "",
-  ].filter(Boolean).join("\n");
-  const derivedUsageTokens = Math.max(0, Math.ceil(derivedJoined.length / 4));
-  const derivedUsagePct = Math.max(0, Math.min(100, Math.round((derivedUsageTokens / modelContextWindow) * 100)));
-  const sessionView = {
-    ...session,
-    contextWindow: modelContextWindow,
-    contextUsageTokens: derivedUsageTokens,
-    contextUsagePct: derivedUsagePct,
-  };
-  const eventsByRun = new Map<string, typeof events>();
-  for (const event of events) {
-    if (!event.runId || event.type === "message.delta" || event.type === "message.done" || event.type === "heartbeat") continue;
-    eventsByRun.set(event.runId, [...(eventsByRun.get(event.runId) ?? []), event]);
-  }
-  const assistantByRun = new Map<string, Message>();
-  for (const message of messages) {
-    if (message.role === "assistant" && message.runId && message.content.trim()) {
-      assistantByRun.set(message.runId, message);
+  const orderedMessages = useMemo(
+    () => [...messages].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    [messages],
+  );
+  const sessionView = useMemo(() => {
+    const latestCompactMarker = [...messages]
+      .reverse()
+      .find((message) => message.role === "system" && /context compacted/i.test(message.content));
+    const compactedMessages = latestCompactMarker
+      ? messages.filter((message) => message.createdAt >= latestCompactMarker.createdAt)
+      : messages;
+    const compactedEvents = latestCompactMarker
+      ? events.filter((event) => event.timestamp >= latestCompactMarker.createdAt)
+      : events;
+    const derivedJoined = [
+      session.compactSummary ?? "",
+      ...compactedMessages.map((message) => `${message.role}: ${message.content}`),
+      ...compactedEvents.slice(-320).map((event) => `${event.type} ${JSON.stringify(event.payload)}`),
+      streamingText ? `assistant: ${streamingText}` : "",
+    ].filter(Boolean).join("\n");
+    const derivedUsageTokens = Math.max(0, Math.ceil(derivedJoined.length / 4));
+    const derivedUsagePct = Math.max(0, Math.min(100, Math.round((derivedUsageTokens / modelContextWindow) * 100)));
+    return {
+      ...session,
+      contextWindow: modelContextWindow,
+      contextUsageTokens: derivedUsageTokens,
+      contextUsagePct: derivedUsagePct,
+    };
+  }, [events, messages, modelContextWindow, session, streamingText]);
+  const eventsByRun = useMemo(() => {
+    const byRun = new Map<string, typeof events>();
+    for (const event of events) {
+      if (!event.runId || event.type === "message.delta" || event.type === "message.done" || event.type === "heartbeat") continue;
+      byRun.set(event.runId, [...(byRun.get(event.runId) ?? []), event]);
     }
-  }
-  const orderedMessages = [...messages].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-  const orphanAssistantMessages = orderedMessages.filter((message) => message.role === "assistant" && message.content.trim() && !message.runId);
-  const handledAssistantIds = new Set<string>();
-  const streamedRunIds = new Set([...eventsByRun.keys(), ...assistantByRun.keys()]);
-  const userRunIds = new Set(orderedMessages.filter((message) => message.role === "user").map((message) => message.runId).filter(Boolean));
-  const orphanRunIds = [...streamedRunIds].filter((runId) => {
-    if (userRunIds.has(runId)) return false;
-    const runEvents = eventsByRun.get(runId) ?? [];
-    return !runEvents.length || !runEvents.every(isCompactContextEvent);
-  });
-  const todoAnchors = buildTodoProgressAnchors(orderedMessages, todoProgress);
+    return byRun;
+  }, [events]);
+  const assistantByRun = useMemo(() => {
+    const byRun = new Map<string, Message>();
+    for (const message of messages) {
+      if (message.role === "assistant" && message.runId && message.content.trim()) {
+        byRun.set(message.runId, message);
+      }
+    }
+    return byRun;
+  }, [messages]);
+  const orphanAssistantMessages = useMemo(
+    () => orderedMessages.filter((message) => message.role === "assistant" && message.content.trim() && !message.runId),
+    [orderedMessages],
+  );
+  const handledAssistantIds = useMemo(() => {
+    const handled = new Set<string>();
+    for (const message of orderedMessages) {
+      if (message.role !== "user" || !message.runId) continue;
+      const assistant = assistantByRun.get(message.runId);
+      if (assistant) handled.add(assistant.id);
+    }
+    return handled;
+  }, [assistantByRun, orderedMessages]);
+  const orphanRunIds = useMemo(() => {
+    const streamedRunIds = new Set([...eventsByRun.keys(), ...assistantByRun.keys()]);
+    const userRunIds = new Set(orderedMessages.filter((message) => message.role === "user").map((message) => message.runId).filter(Boolean));
+    return [...streamedRunIds].filter((runId) => {
+      if (userRunIds.has(runId)) return false;
+      const runEvents = eventsByRun.get(runId) ?? [];
+      return !runEvents.length || !runEvents.every(isCompactContextEvent);
+    });
+  }, [assistantByRun, eventsByRun, orderedMessages]);
+  const todoAnchors = useMemo(() => buildTodoProgressAnchors(orderedMessages, todoProgress), [orderedMessages, todoProgress]);
   const activeEditSummary = buildActiveEditSummary(
     isStreaming && streamingRunId ? eventsByRun.get(streamingRunId) ?? [] : [],
   );
@@ -347,7 +393,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
         {showJumpToBottom ? (
           <button
             className="jump-bottom-button"
-            onClick={scrollToBottom}
+            onClick={() => scrollToBottom(true)}
             aria-label="Scroll to bottom"
           >
             <ChevronDown size={15} />
@@ -386,7 +432,6 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
               const runEvents = runId ? eventsByRun.get(runId) ?? [] : [];
               const assistant = runId ? assistantByRun.get(runId) : undefined;
               const isRunActive = Boolean(isStreaming && streamingRunId === runId);
-              if (assistant) handledAssistantIds.add(assistant.id);
               const hideAssistantNarration = Boolean(runId && todoProgress.runs[runId] && assistant && isTodoNarrationMessage(assistant.content));
               return (
                 <div key={message.id} className="message-group">
@@ -406,7 +451,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
                     </article>
                   ) : null}
                   {runEvents.some((event) => event.type === "file.edit") ? (
-                    <EditedFilesSummary events={runEvents} />
+                    <EditedFilesSummary events={runEvents} workspacePath={session.workspacePath} />
                   ) : null}
                   {isRunActive && streamingText ? (
                     <article className="message assistant">
@@ -428,6 +473,9 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
                   <article className="message assistant">
                     <MarkdownMessage text={assistantByRun.get(runId)!.content} />
                   </article>
+                ) : null}
+                {(eventsByRun.get(runId) ?? []).some((event) => event.type === "file.edit") ? (
+                  <EditedFilesSummary events={eventsByRun.get(runId) ?? []} workspacePath={session.workspacePath} />
                 ) : null}
               </div>
             ))}
