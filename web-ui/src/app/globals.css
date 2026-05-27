@@ -2872,10 +2872,44 @@ details[open] .activity-chevron {
 .markdown ul,
 .markdown ol {
   padding-left: 1.2rem;
+  margin-left: 0.15rem;
+}
+
+.markdown ul {
+  list-style: disc outside;
+}
+
+.markdown ol {
+  list-style: decimal outside;
+}
+
+.markdown ul ul {
+  list-style-type: circle;
+}
+
+.markdown ul ul ul {
+  list-style-type: square;
+}
+
+.markdown ol ol {
+  list-style-type: lower-alpha;
+}
+
+.markdown ol ol ol {
+  list-style-type: lower-roman;
+}
+
+.markdown li {
+  padding-left: 0.2rem;
 }
 
 .markdown li + li {
   margin-top: 4px;
+}
+
+.markdown li::marker {
+  color: color-mix(in srgb, var(--accent) 48%, var(--text));
+  font-size: 0.95em;
 }
 
 .markdown a {
