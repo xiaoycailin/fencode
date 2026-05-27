@@ -1,6 +1,8 @@
 # FenCode
 
-FenCode is a local coding agent runtime with:
+FenCode is a coding agent runtime that runs locally on your computer.
+
+It includes:
 - App Server (default `32188`)
 - Web UI (default `25874`)
 - One CLI launcher: `fencode`

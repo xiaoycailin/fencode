@@ -1,8 +1,8 @@
 {
   "name": "@aiden2209/fencode",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": false,
-  "description": "FenCode launcher CLI for local app server + web UI lifecycle",
+  "description": "FenCode is a coding agent runtime that runs locally on your computer.",
   "license": "UNLICENSED",
   "bin": {
     "fencode": "bin/fencode.js"

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { useState } from "react";
 import { ChevronDown, Copy, MessageSquarePlus, Quote } from "lucide-react";
 import { ActivityFeed } from "./ActivityFeed";
-import { ChatInput } from "./ChatInput";
+import { ChatInput, type GitChangeSummary } from "./ChatInput";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { TodoProgressPanel } from "./todoProgress/TodoProgressPanel";
 import { buildTodoProgressAnchors } from "./todoProgress/todoProgressAnchors";
@@ -27,6 +27,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
   const [selectionMenu, setSelectionMenu] = useState<{ text: string; x: number; y: number } | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [authBadge, setAuthBadge] = useState<{ mode: string; refreshError?: string | null } | null>(null);
+  const [changeSummary, setChangeSummary] = useState<GitChangeSummary | null>(null);
   const [todoProgress, dispatchTodoProgress] = useReducer(todoProgressReducer, initialTodoProgressState);
   const handledTodoEventIdsRef = useRef<Set<string>>(new Set());
   const todoCollapsedRef = useRef<Record<string, boolean>>({});
@@ -126,6 +127,37 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
   }, []);
 
   useAgentStream({ sessionId: detail.session.id, onEvents });
+
+  useEffect(() => {
+    async function refreshChangeSummary() {
+      if (!session.workspacePath) {
+        setChangeSummary(null);
+        return;
+      }
+      try {
+        const params = new URLSearchParams({ root: session.workspacePath });
+        const response = await fetch(`/api/git/status?${params.toString()}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.isRepo) {
+          setChangeSummary(null);
+          return;
+        }
+        setChangeSummary({
+          changedFiles: Number(data.changedFiles) || 0,
+          additions: Number(data.additions) || 0,
+          deletions: Number(data.deletions) || 0,
+          files: Array.isArray(data.files)
+            ? data.files.map((file: { path?: string }) => ({ path: file.path || "" })).filter((file: { path: string }) => file.path)
+            : [],
+        });
+      } catch {
+        setChangeSummary(null);
+      }
+    }
+    void refreshChangeSummary();
+    const timer = window.setInterval(() => void refreshChangeSummary(), 5000);
+    return () => window.clearInterval(timer);
+  }, [events.length, session.workspacePath]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -257,7 +289,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
     }
   }
 
-  const hasChanges = events.some((event) => event.type.startsWith("file."));
+  const hasChanges = (changeSummary?.changedFiles ?? 0) > 0 || events.some((event) => event.type.startsWith("file."));
   const modelContextWindow = models.find((model) => model.id === session.model)?.contextWindow ?? session.contextWindow ?? 128000;
   const latestCompactMarker = [...messages]
     .reverse()
@@ -398,6 +430,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
         <ChatInput
           disabled={isStreaming}
           hasChanges={hasChanges}
+          changeSummary={changeSummary}
           session={sessionView}
           models={models}
           workspaces={workspaces}
@@ -458,7 +491,18 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
         </div>
         <div className="panel-card">
           <strong>Files changed</strong>
-          {hasChanges ? <p className="mt-2 text-sm">src/app/(app)/chat/[sessionId]/page.tsx <span className="diff-plus">+1</span> <span className="diff-minus">-1</span></p> : <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>No changed files yet.</p>}
+          {hasChanges && changeSummary ? (
+            <>
+              <p className="mt-2 text-sm">
+                {changeSummary.changedFiles} {changeSummary.changedFiles === 1 ? "file" : "files"}
+                {" "}<span className="diff-plus">+{changeSummary.additions}</span>
+                {" "}<span className="diff-minus">-{changeSummary.deletions}</span>
+              </p>
+              {changeSummary.files.slice(0, 8).map((file) => (
+                <p key={file.path} className="text-sm" style={{ color: "var(--muted)", marginTop: 6 }}>{file.path}</p>
+              ))}
+            </>
+          ) : <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>No changed files yet.</p>}
         </div>
       </aside>
     </div>

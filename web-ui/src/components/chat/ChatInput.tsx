@@ -34,10 +34,17 @@ type MentionItem = {
 };
 type SkillConfigItem = { id: string; name: string; description: string; trigger: string; enabled: boolean };
 type ImageGenSettings = { selectedModel: string; models: string[] };
+export type GitChangeSummary = {
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+  files: Array<{ path: string }>;
+};
 
 type Props = {
   disabled: boolean;
   hasChanges: boolean;
+  changeSummary: GitChangeSummary | null;
   session: Session;
   models: ModelConfig[];
   workspaces: WorkspaceConfig[];
@@ -55,6 +62,7 @@ type Props = {
 export function ChatInput({
   disabled,
   hasChanges,
+  changeSummary,
   session,
   models,
   workspaces,
@@ -88,6 +96,7 @@ export function ChatInput({
   const editorRef = useRef<HTMLDivElement | null>(null);
   const suggestionMenuRef = useRef<HTMLDivElement | null>(null);
   const hasImagegenMentionInDraft = mentions.some((item) => isImagegenMention(item) && text.includes(item.marker));
+  const changedFileCount = changeSummary?.changedFiles ?? 0;
 
   useEffect(() => {
     if (!activePreview) return;
@@ -224,7 +233,13 @@ export function ChatInput({
       <div className="composer">
         {hasChanges ? (
           <div className="review-bar">
-            <span>1 file changed <span className="diff-plus">+1</span> <span className="diff-minus">-1</span></span>
+            <span>
+              {formatFileCount(changedFileCount)}
+              {changeSummary ? <>
+                {" "}<span className="diff-plus">+{changeSummary.additions}</span>
+                {" "}<span className="diff-minus">-{changeSummary.deletions}</span>
+              </> : null}
+            </span>
             <button className="ghost-button">Review here</button>
           </div>
         ) : null}
@@ -742,6 +757,11 @@ function formatSize(size: number) {
   if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   if (size >= 1024) return `${Math.round(size / 1024)} KB`;
   return `${size} B`;
+}
+
+function formatFileCount(count: number) {
+  if (count <= 1) return `${count || 1} file changed`;
+  return `${count} files changed`;
 }
 
 function renderEditorContent(editor: HTMLDivElement, value: string, attachments: ComposerAttachment[], mentions: MentionItem[] = []) {
