@@ -184,12 +184,12 @@ function parseUnifiedDiff(diff: string): DiffLine[] {
 }
 
 function fallbackLinesFromDiff(diff: string, additions: number, deletions: number): DiffLine[] {
-  const lines = diff
+  const rawLines = diff
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .filter((line) => line && !line.startsWith("diff --git") && !line.startsWith("index "));
   const output: DiffLine[] = [];
-  for (const line of lines) {
+  for (const line of rawLines) {
     if (line.startsWith("+++ ") || line.startsWith("--- ") || line.startsWith("@@")) continue;
     if (line.startsWith("+")) {
       output.push({ kind: "add", sign: "+", text: line.slice(1) });
@@ -201,7 +201,16 @@ function fallbackLinesFromDiff(diff: string, additions: number, deletions: numbe
     }
   }
   if (output.length) return output;
-  if (diff.trim()) return [{ kind: "context", sign: " ", text: diff.trim().slice(0, 500) }];
+  const plainContext = rawLines
+    .filter((line) => !line.startsWith("+++ ") && !line.startsWith("--- ") && !line.startsWith("@@"))
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (plainContext.length) {
+    const expected = Math.max(additions + deletions, additions, deletions, plainContext.length);
+    const maxPreviewLines = Math.min(Math.max(expected, 1), 220);
+    return plainContext.slice(0, maxPreviewLines).map((text) => ({ kind: "context", sign: " ", text }));
+  }
+  if (diff.trim()) return [{ kind: "context", sign: " ", text: diff.trim().slice(0, 1200) }];
   if (additions > 0 || deletions > 0) return [{ kind: additions > 0 ? "add" : "remove", sign: additions > 0 ? "+" : "-", text: "Diff preview unavailable" }];
   return [];
 }

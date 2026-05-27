@@ -201,9 +201,10 @@ Status: foundation implemented for Codex-like lifecycle events.
 - Tujuan: hindari run menggantung di terminal dan jaga agent tetap lanjut workflow berikutnya.
 
 ## Run Watchdog
-- Ada watchdog timeout global per run (`AGENT_RUN_TIMEOUT_MS`, default `90s`).
+- Ada watchdog timeout global per run (`AGENT_RUN_TIMEOUT_MS`, default `30m`).
 - Jika run tidak selesai, server auto-abort run, emit `session.error` + `session.done`, lalu paksa status session kembali `idle`.
 - Ada cleanup fail-safe: jika fungsi runtime keluar tapi status masih `streaming`, server tetap memulihkan ke `idle`.
+- Timeout provider per request juga dinaikkan (`PROVIDER_TIMEOUT_MS`, default `180s`) supaya task panjang, refactor besar, atau reasoning lambat tidak cepat putus padahal run utama masih valid.
 
 ## Executable Skills
 - Mode proxy `fcode-server` sekarang menangani executable skill `imagegen` sendiri, tidak lagi fallback ke jawaban teks biasa.
