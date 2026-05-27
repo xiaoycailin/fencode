@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ChevronDown, Copy, MessageSquarePlus, Quote } from "lucide-react";
 import { ActivityFeed } from "./ActivityFeed";
 import { ChatInput, type GitChangeSummary } from "./ChatInput";
+import { EditedFilesSummary } from "./EditedFilesSummary";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { TodoProgressPanel } from "./todoProgress/TodoProgressPanel";
 import { buildTodoProgressAnchors } from "./todoProgress/todoProgressAnchors";
@@ -336,6 +337,9 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
     return !runEvents.length || !runEvents.every(isCompactContextEvent);
   });
   const todoAnchors = buildTodoProgressAnchors(orderedMessages, todoProgress);
+  const activeEditSummary = buildActiveEditSummary(
+    isStreaming && streamingRunId ? eventsByRun.get(streamingRunId) ?? [] : [],
+  );
 
   return (
     <div className="chat-layout">
@@ -401,6 +405,9 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
                       <MarkdownMessage text={assistant.content} />
                     </article>
                   ) : null}
+                  {runEvents.some((event) => event.type === "file.edit") ? (
+                    <EditedFilesSummary events={runEvents} />
+                  ) : null}
                   {isRunActive && streamingText ? (
                     <article className="message assistant">
                       <MarkdownMessage text={streamingText} />
@@ -429,8 +436,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
         </div>
         <ChatInput
           disabled={isStreaming}
-          hasChanges={hasChanges}
-          changeSummary={changeSummary}
+          activeEditSummary={activeEditSummary}
           session={sessionView}
           models={models}
           workspaces={workspaces}
@@ -512,6 +518,27 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
 function isCompactContextEvent(event: { type: string; payload: unknown }) {
   const payload = event.payload as { tool?: string } | undefined;
   return event.type.startsWith("tool.") && payload?.tool === "context.compact";
+}
+
+function buildActiveEditSummary(events: AgentEvent[]): GitChangeSummary | null {
+  const editEvents = events.filter((event) => event.type === "file.edit");
+  if (!editEvents.length) return null;
+  const files = new Map<string, { path: string }>();
+  let additions = 0;
+  let deletions = 0;
+  for (const event of editEvents) {
+    const payload = event.payload as { path?: string; additions?: number; deletions?: number };
+    const path = String(payload.path ?? "").trim();
+    if (path) files.set(path, { path });
+    additions += Number(payload.additions) || 0;
+    deletions += Number(payload.deletions) || 0;
+  }
+  return {
+    changedFiles: files.size || editEvents.length,
+    additions,
+    deletions,
+    files: [...files.values()],
+  };
 }
 
 function parseTodoRunFromEvent(event: AgentEvent): TodoProgressRun | null {

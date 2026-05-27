@@ -43,8 +43,7 @@ export type GitChangeSummary = {
 
 type Props = {
   disabled: boolean;
-  hasChanges: boolean;
-  changeSummary: GitChangeSummary | null;
+  activeEditSummary: GitChangeSummary | null;
   session: Session;
   models: ModelConfig[];
   workspaces: WorkspaceConfig[];
@@ -61,8 +60,7 @@ type Props = {
 
 export function ChatInput({
   disabled,
-  hasChanges,
-  changeSummary,
+  activeEditSummary,
   session,
   models,
   workspaces,
@@ -96,7 +94,7 @@ export function ChatInput({
   const editorRef = useRef<HTMLDivElement | null>(null);
   const suggestionMenuRef = useRef<HTMLDivElement | null>(null);
   const hasImagegenMentionInDraft = mentions.some((item) => isImagegenMention(item) && text.includes(item.marker));
-  const changedFileCount = changeSummary?.changedFiles ?? 0;
+  const changedFileCount = activeEditSummary?.changedFiles ?? 0;
 
   useEffect(() => {
     if (!activePreview) return;
@@ -231,14 +229,12 @@ export function ChatInput({
   return (
     <div className="composer-wrap">
       <div className="composer">
-        {hasChanges ? (
+        {activeEditSummary ? (
           <div className="review-bar">
             <span>
               {formatFileCount(changedFileCount)}
-              {changeSummary ? <>
-                {" "}<span className="diff-plus">+{changeSummary.additions}</span>
-                {" "}<span className="diff-minus">-{changeSummary.deletions}</span>
-              </> : null}
+              {" "}<span className="diff-plus">+{activeEditSummary.additions}</span>
+              {" "}<span className="diff-minus">-{activeEditSummary.deletions}</span>
             </span>
             <button className="ghost-button">Review here</button>
           </div>
