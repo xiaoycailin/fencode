@@ -7,6 +7,15 @@ import { useEffect, useState } from "react";
 import type { Session } from "@/types/session";
 import { useSessionStore } from "@/stores/sessionStore";
 
+type VersionState = {
+  packageName: string;
+  currentVersion: string;
+  latestVersion: string | null;
+  hasUpdate: boolean;
+  updateCommand: string;
+  error?: string;
+};
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -14,6 +23,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { currentSessionTitle, currentWorkspacePath } = useSessionStore();
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+  const [version, setVersion] = useState<VersionState | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [targetVersion, setTargetVersion] = useState("");
+  const [baseVersion, setBaseVersion] = useState("");
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("fcode:theme");
@@ -48,6 +61,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("fcode:sessions-refresh", refreshSessions);
   }, [pathname]);
 
+  useEffect(() => {
+    void fetch("/api/settings/version", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => setVersion(data))
+      .catch(() => setVersion(null));
+  }, []);
+
+  useEffect(() => {
+    if (!updating) return;
+    const timer = window.setInterval(() => {
+      void fetch("/api/settings/version", { cache: "no-store" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: VersionState | null) => {
+          if (!data) return;
+          setVersion(data);
+          const reachedTarget = !!targetVersion && data.currentVersion === targetVersion;
+          const changedFromBase = !!baseVersion && data.currentVersion !== baseVersion && !data.hasUpdate;
+          if (reachedTarget || changedFromBase) {
+            window.location.reload();
+          }
+        })
+        .catch(() => {
+          // Server can be unavailable while fencode update restarts services.
+        });
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [baseVersion, targetVersion, updating]);
+
   async function createChat() {
     const preferredModel = typeof window !== "undefined" ? window.localStorage.getItem("fcode:last-model") ?? undefined : undefined;
     const preferredWorkspace = typeof window !== "undefined" ? window.localStorage.getItem("fcode:last-workspace") ?? undefined : undefined;
@@ -78,6 +119,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     window.dispatchEvent(new Event("fcode:sessions-refresh"));
   }
 
+  async function updateNow() {
+    setUpdating(true);
+    setBaseVersion(version?.currentVersion || "");
+    setTargetVersion(version?.latestVersion || "");
+    try {
+      const response = await fetch("/api/settings/version", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        setUpdating(false);
+        setTargetVersion("");
+      }
+    } catch {
+      setUpdating(false);
+      setTargetVersion("");
+    }
+  }
+
   const nav = [
     { href: "/workspace", label: "Workspace", icon: FolderGit2 },
     { href: "/git", label: "Git", icon: GitBranch },
@@ -89,10 +147,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <main className="app-shell">
       <aside className="sidebar" aria-label="FCode Sidebar">
         <div className="sidebar-header">
-          <Link className="brand" href="/chat">
-            <span className="brand-mark">F</span>
-            <span className="hide-compact">FCode V2</span>
-          </Link>
+          <div className="brand-stack">
+            <Link className="brand" href="/chat">
+              <span className="brand-mark">F</span>
+              <span className="hide-compact">FCode V2</span>
+            </Link>
+            <div className="hide-compact sidebar-version-block">
+              <span className="sidebar-version-text">v{version?.currentVersion || "..."}</span>
+              {version?.hasUpdate && version.latestVersion ? (
+                <div className="sidebar-update-callout">
+                  <span>New version available: v{version.latestVersion}</span>
+                  <button type="button" className="sidebar-update-button" disabled={updating} onClick={() => void updateNow()}>
+                    {updating ? <><span>Updating</span><span className="sidebar-update-dots"><i /><i /><i /></span></> : "Update now"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
           <button className="icon-button" aria-label="New chat" onClick={createChat}><Plus size={16} /></button>
         </div>
         <div className="sidebar-body">

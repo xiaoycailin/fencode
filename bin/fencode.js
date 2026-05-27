@@ -267,11 +267,13 @@ function runNpm(args) {
     return spawnSync("npm", args, {
       encoding: "utf8",
       windowsHide: true,
+      timeout: 180_000,
     });
   }
   return spawnSync("cmd.exe", ["/d", "/s", "/c", ["npm", ...args].join(" ")], {
     encoding: "utf8",
     windowsHide: true,
+    timeout: 180_000,
   });
 }
 
@@ -460,6 +462,51 @@ function checkUpdate() {
   }
 }
 
+async function update() {
+  const meta = packageMeta();
+  const state = readState();
+  const childState = readChildState();
+  const appPort = Number((state && state.appPort) || (childState && childState.appPort) || DEFAULT_AP);
+  const uiPort = Number((state && state.uiPort) || (childState && childState.uiPort) || DEFAULT_UI);
+  const wasRunning = isAlive(Number((state && state.supervisorPid) || 0))
+    || isAlive(Number((childState && childState.supervisorPid) || 0))
+    || pidsListeningOnPort(appPort).length > 0
+    || pidsListeningOnPort(uiPort).length > 0;
+
+  brand();
+  row("package", color(meta.name, COLOR.cyan));
+  row("current", color(`v${meta.version}`, COLOR.bold));
+  row("state", color("updating", COLOR.yellow), wasRunning ? "server restart included" : "package only");
+
+  let targetVersion = "";
+  try {
+    targetVersion = latestVersion(meta.name);
+  } catch {}
+
+  if (wasRunning) {
+    stop();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+  }
+
+  const result = runNpm(["i", "-g", `${meta.name}@latest`]);
+  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+  if (result.status !== 0) {
+    throw new Error(output || "npm global update failed");
+  }
+
+  if (wasRunning) {
+    await start(["--ap", String(appPort), "--ui", String(uiPort)]);
+  }
+
+  console.log("");
+  row("updated", color(`v${meta.version}`, COLOR.dim), color(`-> v${targetVersion || "latest"}`, COLOR.green));
+  row("app server", url(`http://localhost:${appPort}`), wasRunning ? "running" : "ready on next start");
+  row("web ui", url(`http://localhost:${uiPort}`), wasRunning ? "running" : "ready on next start");
+  row("logs", color(path.join(RUNTIME_DIR, "app-server.out.log"), COLOR.dim));
+  row("", color(path.join(RUNTIME_DIR, "web-ui.out.log"), COLOR.dim));
+  row("next", color("fencode logs --tail 40", COLOR.cyan));
+}
+
 function autoStart(list) {
   const hasTrue = list.includes("--true");
   const hasFalse = list.includes("--false");
@@ -515,6 +562,7 @@ Usage:
   fencode start [--ap <port>] [--ui <port>]
   fencode status
   fencode check
+  fencode update
   fencode logs [--tail <lines>]
   fencode autostart --true
   fencode autostart --false
@@ -534,6 +582,7 @@ async function main() {
     if (command === "start") return await start(rest);
     if (command === "status") return status();
     if (command === "check") return checkUpdate();
+    if (command === "update") return await update();
     if (command === "logs") return logs(rest);
     if (command === "autostart") return autoStart(rest);
     if (command === "version") return version();

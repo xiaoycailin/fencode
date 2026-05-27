@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { NextResponse } from "next/server";
 
 type PackageMeta = {
@@ -39,25 +39,37 @@ export async function GET() {
 
 export async function POST() {
   const meta = readPackageMeta();
-  const result = runNpm(["i", "-g", `${meta.name}@latest`], 120_000);
-  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
-  if (result.status !== 0) {
-    return NextResponse.json({ ok: false, output: output || "npm update failed" }, { status: 500 });
+  const started = runLauncherUpdate(meta.name);
+  if (!started.ok) {
+    return NextResponse.json({ ok: false, output: started.output }, { status: 500 });
   }
-  return NextResponse.json({ ok: true, output });
+  return NextResponse.json({
+    ok: true,
+    output: "FenCode update started. The app server and web UI may restart shortly.",
+  });
 }
 
 function readPackageMeta(): PackageMeta {
-  const packagePath = path.resolve(process.cwd(), "package.json");
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packagePath, "utf8")) as Partial<PackageMeta>;
-    return {
-      name: String(parsed.name || fallbackMeta.name),
-      version: String(parsed.version || fallbackMeta.version),
-    };
-  } catch {
-    return fallbackMeta;
+  const cwd = process.cwd();
+  const candidates = [
+    path.resolve(cwd, "package.json"),
+    path.resolve(cwd, "..", "package.json"),
+    path.resolve(cwd, "..", "..", "package.json"),
+    path.resolve(cwd, "..", "..", "..", "package.json"),
+    path.resolve(cwd, "..", "..", "..", "..", "package.json"),
+  ];
+  for (const packagePath of candidates) {
+    try {
+      if (!fs.existsSync(packagePath)) continue;
+      const parsed = JSON.parse(fs.readFileSync(packagePath, "utf8")) as Partial<PackageMeta>;
+      const name = String(parsed.name || "").trim();
+      const version = String(parsed.version || "").trim();
+      if (name === fallbackMeta.name && version) {
+        return { name, version };
+      }
+    } catch {}
   }
+  return fallbackMeta;
 }
 
 function readLatestVersion(packageName: string) {
@@ -85,6 +97,33 @@ function runNpm(args: string[], timeout = 30_000) {
     windowsHide: true,
     timeout,
   });
+}
+
+function runLauncherUpdate(packageName: string) {
+  const candidateRoots = [
+    process.cwd(),
+    path.resolve(process.cwd(), ".."),
+    path.resolve(process.cwd(), "..", ".."),
+    path.resolve(process.cwd(), "..", "..", ".."),
+    path.resolve(process.cwd(), "..", "..", "..", ".."),
+  ];
+  const launcherRoot = candidateRoots.find((root) => fs.existsSync(path.join(root, "bin", "fencode.js")));
+  if (launcherRoot) {
+    const child = spawn(process.execPath, [path.join(launcherRoot, "bin", "fencode.js"), "update"], {
+      cwd: launcherRoot,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, FENCODE_HOME: process.env.FENCODE_HOME || "" },
+    });
+    child.unref();
+    return { ok: true, output: `started fencode update pid=${child.pid || "n/a"}` };
+  }
+  const result = runNpm(["i", "-g", `${packageName}@latest`], 120_000);
+  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+  return result.status === 0
+    ? { ok: true, output }
+    : { ok: false, output: output || "npm update failed" };
 }
 
 function compareSemver(a: string, b: string) {

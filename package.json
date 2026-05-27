@@ -1,6 +1,6 @@
 {
   "name": "@aiden2209/fencode",
-  "version": "0.1.5",
+  "version": "0.1.9",
   "private": false,
   "description": "FenCode launcher CLI for local app server + web UI lifecycle",
   "license": "UNLICENSED",

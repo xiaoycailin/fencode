@@ -366,6 +366,11 @@ new text
 - `fencode check`
   - cek versi package saat ini vs npm registry
   - jika ada update, output command upgrade global
+- `fencode update`
+  - stop app/web UI yang sedang running
+  - jalankan `npm i -g @aiden2209/fencode@latest`
+  - start ulang app/web UI dengan port lama/default
+  - output versi lama -> baru, URL app/web, dan path logs
 - `fencode autostart --true|--false`
   - Windows only
   - menulis `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\FenCode`
@@ -381,7 +386,13 @@ new text
 - Endpoint:
   - `GET /api/settings/version`
   - `POST /api/settings/version`
-- `POST` menjalankan `npm i -g @aiden2209/fencode@latest` dari server host.
+- `POST` menjalankan `fencode update` lewat launcher detached jika package root ditemukan.
+- UI setelah klik `Update now`:
+  - menampilkan indikator `Updating...`
+  - polling `GET /api/settings/version` tiap 5 detik
+  - ignore fetch error karena app/web server normalnya mati sebentar saat update
+  - reload halaman saat versi aktif sudah match target/latest
+- Fallback `POST` tetap menjalankan `npm i -g @aiden2209/fencode@latest` dari server host jika launcher tidak ditemukan.
 - Pada Windows, npm subprocess harus lewat `cmd.exe /c npm ...`, bukan `spawnSync("npm.cmd")`, untuk hindari error `EINVAL` dari Node runtime.
 
 ## Home Directory Resolution

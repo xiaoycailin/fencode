@@ -31,6 +31,7 @@ fencode restart [--ap <port>] [--ui <port>]
 fencode status
 fencode logs [--tail <lines>]
 fencode check
+fencode update
 fencode autostart --true
 fencode autostart --false
 fencode version
@@ -95,6 +96,20 @@ Upgrade:
 ```bash
 npm i -g @aiden2209/fencode@latest
 ```
+
+Or use:
+
+```bash
+fencode update
+```
+
+`fencode update` will:
+- stop running FenCode services
+- upgrade global package to latest
+- start services again with previous/default ports
+- print updated version and runtime URLs
+
+When started from the UI, FenCode starts the update in the background, polls health/version every 5 seconds, tolerates temporary downtime during restart, then reloads the page after the active version matches the latest version.
 
 ## Windows Autostart
 
