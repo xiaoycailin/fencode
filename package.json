@@ -1,8 +1,16 @@
 {
   "name": "@aiden2209/fencode",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "private": false,
   "description": "FenCode is a coding agent runtime that runs locally on your computer.",
+  "homepage": "https://github.com/xiaoycailin/fencode#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiaoycailin/fencode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xiaoycailin/fencode/issues"
+  },
   "license": "UNLICENSED",
   "bin": {
     "fencode": "bin/fencode.js"
