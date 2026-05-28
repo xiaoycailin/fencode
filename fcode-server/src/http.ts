@@ -139,6 +139,7 @@ async function sessionRoute(
   }
   if (action === "approval" && method === "POST") return resolveApproval(request, response, id);
   if (action === "compact" && method === "POST") return compactSession(response, id);
+  if (action === "undo" && method === "POST") return undoSessionRun(request, response, id);
 
   return json(response, 404, { error: errorPayload(ERROR_CODES.NOT_FOUND, "Not found") });
 }
@@ -164,6 +165,54 @@ function compactSession(response: http.ServerResponse, sessionId: string) {
   publishEvent(sessionId, "tool.done", { tool: "context.compact", status: "completed", output: "Context compacted", duration: 0 }, { runId });
   const session = patchSession(sessionId, {});
   return json(response, 200, { ok: true, marker, session });
+}
+
+async function undoSessionRun(request: http.IncomingMessage, response: http.ServerResponse, sessionId: string) {
+  const detail = getSessionDetail(sessionId);
+  if (!detail) return json(response, 404, { error: errorPayload(ERROR_CODES.SESSION_NOT_FOUND, "Session not found") });
+  if (detail.session.status === "streaming" || detail.session.status === "waiting-approval") {
+    return json(response, 409, { error: errorPayload(ERROR_CODES.SESSION_BUSY, "Session is already running") });
+  }
+  const body = await readJson(request);
+  const runId = String(body.runId || "").trim();
+  if (!runId) return json(response, 400, { error: errorPayload(ERROR_CODES.BAD_REQUEST, "runId is required") });
+
+  const editEvents = detail.events.filter((event) => event.runId === runId && event.type === "file.edit");
+  if (!editEvents.length) {
+    return json(response, 404, { error: errorPayload(ERROR_CODES.NOT_FOUND, "No editable file events found for run") });
+  }
+
+  const reverted: string[] = [];
+  for (const event of [...editEvents].reverse()) {
+    const payload = event.payload as { path?: string; diff?: string };
+    const relativePath = String(payload.path || "");
+    const diff = String(payload.diff || "");
+    if (!relativePath || !diff.includes("diff --git")) continue;
+    const before = await readTextFile(detail.session.workspacePath, relativePath);
+    const after = reverseUnifiedDiffOnContent(before, diff);
+    if (after === before) continue;
+    await writeTextFile(detail.session.workspacePath, relativePath, after);
+    reverted.push(relativePath);
+    const undoDiff = buildUnifiedDiff(relativePath, before, after);
+    publishEvent(sessionId, "file.edit", {
+      path: relativePath,
+      diff: undoDiff,
+      hunks: Math.max(1, (undoDiff.match(/^@@/gm) ?? []).length),
+      additions: countDiffLines(undoDiff, "+"),
+      deletions: countDiffLines(undoDiff, "-"),
+      expandable: true,
+    }, { runId });
+  }
+
+  if (reverted.length) {
+    publishEvent(sessionId, "tool.done", {
+      tool: "file.undo",
+      output: `Undo completed for ${reverted.length} file${reverted.length === 1 ? "" : "s"}.`,
+      duration: 0,
+      status: "completed",
+    }, { runId });
+  }
+  return json(response, 200, { ok: true, runId, reverted });
 }
 
 async function sendMessage(request: http.IncomingMessage, response: http.ServerResponse, sessionId: string) {
@@ -883,4 +932,81 @@ function rootFrom(url: URL) {
 
 function arrayOfStrings(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function reverseUnifiedDiffOnContent(currentContent: string, diff: string) {
+  const lines = diff.split(/\r?\n/);
+  const hunks: Array<{ oldLines: string[]; newLines: string[] }> = [];
+  let active: { oldLines: string[]; newLines: string[] } | null = null;
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      active = { oldLines: [], newLines: [] };
+      hunks.push(active);
+      continue;
+    }
+    if (!active) continue;
+    if (line.startsWith("-")) {
+      active.oldLines.push(line.slice(1));
+      continue;
+    }
+    if (line.startsWith("+")) {
+      active.newLines.push(line.slice(1));
+      continue;
+    }
+  }
+  let next = currentContent;
+  for (const hunk of hunks) {
+    const oldBlock = hunk.oldLines.join("\n");
+    const newBlock = hunk.newLines.join("\n");
+    if (!newBlock) continue;
+    if (next.includes(newBlock)) {
+      next = next.replace(newBlock, oldBlock);
+    }
+  }
+  return next;
+}
+
+function buildUnifiedDiff(filePath: string, before: string, after: string) {
+  const oldLines = splitComparableLines(before);
+  const newLines = splitComparableLines(after);
+  let prefix = 0;
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix += 1;
+
+  let oldSuffix = oldLines.length - 1;
+  let newSuffix = newLines.length - 1;
+  while (oldSuffix >= prefix && newSuffix >= prefix && oldLines[oldSuffix] === newLines[newSuffix]) {
+    oldSuffix -= 1;
+    newSuffix -= 1;
+  }
+
+  const contextBefore = Math.min(2, prefix);
+  const hunkOldStart = Math.max(0, prefix - contextBefore);
+  const hunkNewStart = hunkOldStart;
+  const contextAfter = Math.min(2, oldLines.length - oldSuffix - 1, newLines.length - newSuffix - 1);
+  const hunkOldEnd = Math.min(oldLines.length - 1, oldSuffix + contextAfter);
+  const hunkNewEnd = Math.min(newLines.length - 1, newSuffix + contextAfter);
+  const oldCount = Math.max(0, hunkOldEnd - hunkOldStart + 1);
+  const newCount = Math.max(0, hunkNewEnd - hunkNewStart + 1);
+  const rows = [
+    `diff --git a/${filePath} b/${filePath}`,
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    `@@ -${hunkOldStart + 1},${oldCount} +${hunkNewStart + 1},${newCount} @@`,
+  ];
+
+  for (let index = hunkOldStart; index < prefix; index += 1) rows.push(` ${oldLines[index] ?? ""}`);
+  for (let index = prefix; index <= oldSuffix; index += 1) rows.push(`-${oldLines[index] ?? ""}`);
+  for (let index = prefix; index <= newSuffix; index += 1) rows.push(`+${newLines[index] ?? ""}`);
+  for (let index = oldSuffix + 1; index <= hunkOldEnd; index += 1) rows.push(` ${oldLines[index] ?? ""}`);
+  return rows.join("\n");
+}
+
+function splitComparableLines(text: string) {
+  const lines = text.split(/\r?\n/);
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+function countDiffLines(diff: string, symbol: "+" | "-") {
+  return diff.split(/\r?\n/).filter((line) => line.startsWith(symbol) && !line.startsWith(symbol.repeat(3))).length;
 }

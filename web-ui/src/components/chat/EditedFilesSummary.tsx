@@ -2,6 +2,7 @@
 
 import { ChevronDown, FileDiff, RotateCcw } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
+import type { MouseEvent } from "react";
 import { extractCodeInnerHtml, highlightCodeToHtml } from "@/lib/codeTheme";
 import type { AgentEvent } from "@/types/events";
 
@@ -20,27 +21,45 @@ type DiffLine = {
   text: string;
 };
 
-export function EditedFilesSummary({ events, workspacePath }: { events: AgentEvent[]; workspacePath?: string }) {
+export function EditedFilesSummary({
+  events,
+  workspacePath,
+  sessionId,
+  runId,
+}: {
+  events: AgentEvent[];
+  workspacePath?: string;
+  sessionId: string;
+  runId?: string;
+}) {
   const files = useMemo(
-    () =>
-      events
-        .filter((event) => event.type === "file.edit")
-        .map((event) => {
-          const payload = event.payload as { path?: string; diff?: string; additions?: number; deletions?: number };
-          const path = String(payload.path ?? "unknown");
-          const diff = String(payload.diff ?? "");
-          const parsedLines = parseUnifiedDiff(diff);
-          const lines = parsedLines.length ? parsedLines : fallbackLinesFromDiff(diff, Number(payload.additions ?? 0), Number(payload.deletions ?? 0));
-          const inferred = inferDisplayCounts(diff, Number(payload.additions ?? 0), Number(payload.deletions ?? 0), lines);
-          return {
+    () => {
+      const merged = new Map<string, EditedFile>();
+      for (const event of events) {
+        if (event.type !== "file.edit") continue;
+        const payload = event.payload as { path?: string; diff?: string; additions?: number; deletions?: number };
+        const path = String(payload.path ?? "unknown");
+        const diff = String(payload.diff ?? "");
+        const parsedLines = parseUnifiedDiff(diff);
+        const lines = parsedLines.length ? parsedLines : fallbackLinesFromDiff(diff, Number(payload.additions ?? 0), Number(payload.deletions ?? 0));
+        const inferred = inferDisplayCounts(diff, Number(payload.additions ?? 0), Number(payload.deletions ?? 0), lines);
+        const current = merged.get(path);
+        if (!current) {
+          merged.set(path, {
             path,
             additions: inferred.additions,
             deletions: inferred.deletions,
             lines,
             language: languageFromPath(path),
-          };
-        })
-        .filter((file) => file.lines.length || file.additions > 0 || file.deletions > 0),
+          });
+          continue;
+        }
+        current.additions += inferred.additions;
+        current.deletions += inferred.deletions;
+        current.lines = [...current.lines, ...lines];
+      }
+      return [...merged.values()].filter((file) => file.lines.length || file.additions > 0 || file.deletions > 0);
+    },
     [events],
   );
 
@@ -48,6 +67,16 @@ export function EditedFilesSummary({ events, workspacePath }: { events: AgentEve
 
   const additions = files.reduce((sum, file) => sum + file.additions, 0);
   const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
+
+  async function undoRun(event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    if (!runId) return;
+    await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/undo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId }),
+    });
+  }
 
   return (
     <details className="edited-files-summary">
@@ -63,10 +92,9 @@ export function EditedFilesSummary({ events, workspacePath }: { events: AgentEve
           </span>
         </span>
         <span className="edited-files-actions">
-          <button type="button" className="edited-files-link" disabled onClick={(event) => event.stopPropagation()}>
+          <button type="button" className="edited-files-link" disabled={!runId} onClick={(event) => void undoRun(event)}>
             Undo <RotateCcw size={12} />
           </button>
-          <button type="button" className="ghost-button" onClick={(event) => event.stopPropagation()}>Review</button>
           <ChevronDown className="edited-files-chevron" size={14} />
         </span>
       </summary>
@@ -186,10 +214,11 @@ function parseUnifiedDiff(diff: string): DiffLine[] {
 function fallbackLinesFromDiff(diff: string, additions: number, deletions: number): DiffLine[] {
   const rawLines = diff
     .split(/\r?\n/)
-    .map((line) => line.trimEnd())
+    .map((line) => line.replace(/\t/g, "  ").trimEnd())
     .filter((line) => line && !line.startsWith("diff --git") && !line.startsWith("index "));
   const output: DiffLine[] = [];
   for (const line of rawLines) {
+    if (isTruncatedMarker(line)) continue;
     if (line.startsWith("+++ ") || line.startsWith("--- ") || line.startsWith("@@")) continue;
     if (line.startsWith("+")) {
       output.push({ kind: "add", sign: "+", text: line.slice(1) });
@@ -202,9 +231,8 @@ function fallbackLinesFromDiff(diff: string, additions: number, deletions: numbe
   }
   if (output.length) return output;
   const plainContext = rawLines
-    .filter((line) => !line.startsWith("+++ ") && !line.startsWith("--- ") && !line.startsWith("@@"))
-    .map((line) => line.trim())
-    .filter(Boolean);
+    .filter((line) => !isTruncatedMarker(line) && !line.startsWith("+++ ") && !line.startsWith("--- ") && !line.startsWith("@@"))
+    .filter((line) => line.trim().length > 0);
   if (plainContext.length) {
     const expected = Math.max(additions + deletions, additions, deletions, plainContext.length);
     const maxPreviewLines = Math.min(Math.max(expected, 1), 220);
@@ -225,6 +253,10 @@ function inferDisplayCounts(diff: string, additions: number, deletions: number, 
   if (addFromLines > 0 || delFromLines > 0) return { additions: addFromLines, deletions: delFromLines };
   if (lines.length > 0) return { additions: lines.length, deletions: 0 };
   return { additions: 0, deletions: 0 };
+}
+
+function isTruncatedMarker(line: string) {
+  return /^\s*\.\.\.\s+truncated\s*$/i.test(line) || /^\s*\.\.\.\s+\(\d+\s+chars\s+truncated\)\s*$/i.test(line);
 }
 
 function languageFromPath(path: string) {

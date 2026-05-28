@@ -346,7 +346,7 @@ new text
 - file:
   - `tool.start` `file.read` / `file.write`
   - `tool.done` `file.read` / `file.write`
-  - `file.edit` for write preview
+  - `file.edit` now emits unified diff preview (includes `-old` and `+new` lines when replacement/edit happens) so UI can render red/green diff lanes reliably.
 - generic:
   - `thinking.*`
   - `message.delta`, `message.done`

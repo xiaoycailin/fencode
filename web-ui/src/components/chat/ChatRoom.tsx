@@ -28,7 +28,6 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
   const [selectionMenu, setSelectionMenu] = useState<{ text: string; x: number; y: number } | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [authBadge, setAuthBadge] = useState<{ mode: string; refreshError?: string | null } | null>(null);
-  const [changeSummary, setChangeSummary] = useState<GitChangeSummary | null>(null);
   const [todoProgress, dispatchTodoProgress] = useReducer(todoProgressReducer, initialTodoProgressState);
   const handledTodoEventIdsRef = useRef<Set<string>>(new Set());
   const todoCollapsedRef = useRef<Record<string, boolean>>({});
@@ -147,40 +146,6 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
   }, []);
 
   useAgentStream({ sessionId: detail.session.id, onEvents });
-
-  useEffect(() => {
-    async function refreshChangeSummary() {
-      if (!session.workspacePath) {
-        setChangeSummary(null);
-        return;
-      }
-      try {
-        const params = new URLSearchParams({ root: session.workspacePath });
-        const response = await fetch(`/api/git/status?${params.toString()}`, { cache: "no-store" });
-        const data = await response.json();
-        if (!response.ok || !data.isRepo) {
-          setChangeSummary(null);
-          return;
-        }
-        setChangeSummary({
-          changedFiles: Number(data.changedFiles) || 0,
-          additions: Number(data.additions) || 0,
-          deletions: Number(data.deletions) || 0,
-          files: Array.isArray(data.files)
-            ? data.files.map((file: { path?: string }) => ({ path: file.path || "" })).filter((file: { path: string }) => file.path)
-            : [],
-        });
-      } catch {
-        setChangeSummary(null);
-      }
-    }
-    void refreshChangeSummary();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      void refreshChangeSummary();
-    }, 15000);
-    return () => window.clearInterval(timer);
-  }, [session.workspacePath]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -312,7 +277,6 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
     }
   }
 
-  const hasChanges = (changeSummary?.changedFiles ?? 0) > 0 || events.some((event) => event.type.startsWith("file."));
   const modelContextWindow = models.find((model) => model.id === session.model)?.contextWindow ?? session.contextWindow ?? 128000;
   const orderedMessages = useMemo(
     () => [...messages].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
@@ -382,6 +346,22 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
       return !runEvents.length || !runEvents.every(isCompactContextEvent);
     });
   }, [assistantByRun, eventsByRun, orderedMessages]);
+  const orphanRunsOrdered = useMemo(() => {
+    return orphanRunIds
+      .map((runId) => {
+        const runEvents = eventsByRun.get(runId) ?? [];
+        const assistant = assistantByRun.get(runId);
+        const timestamps = [
+          ...runEvents.map((event) => event.timestamp),
+          assistant?.createdAt ?? "",
+        ].filter(Boolean);
+        return {
+          runId,
+          sortTs: timestamps.length ? timestamps.sort()[0] : "9999-12-31T23:59:59.999Z",
+        };
+      })
+      .sort((left, right) => left.sortTs.localeCompare(right.sortTs));
+  }, [assistantByRun, eventsByRun, orphanRunIds]);
   const todoAnchors = useMemo(() => buildTodoProgressAnchors(orderedMessages, todoProgress), [orderedMessages, todoProgress]);
   const activeEditSummary = buildActiveEditSummary(
     isStreaming && streamingRunId ? eventsByRun.get(streamingRunId) ?? [] : [],
@@ -451,7 +431,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
                     </article>
                   ) : null}
                   {runEvents.some((event) => event.type === "file.edit") ? (
-                    <EditedFilesSummary events={runEvents} workspacePath={session.workspacePath} />
+                    <EditedFilesSummary events={runEvents} workspacePath={session.workspacePath} sessionId={detail.session.id} runId={runId} />
                   ) : null}
                   {isRunActive && streamingText ? (
                     <article className="message assistant">
@@ -466,7 +446,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
                 {isTodoNarrationMessage(message.content) ? null : <MarkdownMessage text={message.content} />}
               </article>
             ))}
-            {orphanRunIds.map((runId) => (
+            {orphanRunsOrdered.map(({ runId }) => (
               <div key={runId} className="message-group">
                 <ActivityFeed events={eventsByRun.get(runId) ?? []} active={isStreaming && streamingRunId === runId} onApprovalDecision={resolveApproval} />
                 {assistantByRun.get(runId)?.content ? (
@@ -475,7 +455,7 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
                   </article>
                 ) : null}
                 {(eventsByRun.get(runId) ?? []).some((event) => event.type === "file.edit") ? (
-                  <EditedFilesSummary events={eventsByRun.get(runId) ?? []} workspacePath={session.workspacePath} />
+                  <EditedFilesSummary events={eventsByRun.get(runId) ?? []} workspacePath={session.workspacePath} sessionId={detail.session.id} runId={runId} />
                 ) : null}
               </div>
             ))}
@@ -536,29 +516,6 @@ export function ChatRoom({ detail }: { detail: SessionDetail }) {
           </div>
         ) : null}
       </div>
-      <aside className="right-panel">
-        <div className="panel-card mb-4">
-          <strong>Session</strong>
-          <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>Model: {session.model}</p>
-          <p className="text-sm" style={{ color: "var(--muted)" }}>Permission: {session.permission}</p>
-          <p className="text-sm" style={{ color: "var(--muted)" }}>Status: {session.status === "waiting-approval" ? "waiting-approval" : isStreaming ? "streaming" : session.status}</p>
-        </div>
-        <div className="panel-card">
-          <strong>Files changed</strong>
-          {hasChanges && changeSummary ? (
-            <>
-              <p className="mt-2 text-sm">
-                {changeSummary.changedFiles} {changeSummary.changedFiles === 1 ? "file" : "files"}
-                {" "}<span className="diff-plus">+{changeSummary.additions}</span>
-                {" "}<span className="diff-minus">-{changeSummary.deletions}</span>
-              </p>
-              {changeSummary.files.slice(0, 8).map((file) => (
-                <p key={file.path} className="text-sm" style={{ color: "var(--muted)", marginTop: 6 }}>{file.path}</p>
-              ))}
-            </>
-          ) : <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>No changed files yet.</p>}
-        </div>
-      </aside>
     </div>
   );
 }
