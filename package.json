@@ -1,6 +1,6 @@
 {
   "name": "@aiden2209/fencode",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": false,
   "description": "FenCode is a coding agent runtime that runs locally on your computer.",
   "license": "UNLICENSED",

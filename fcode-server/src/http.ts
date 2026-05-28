@@ -28,6 +28,10 @@ import { AGENT_RUN_TIMEOUT_MS } from "./runtime/runtimePolicy.js";
 import { resolveFencodeHome } from "./runtimeHome.js";
 
 type JsonBody = Record<string, unknown>;
+type IncomingAgentInputItem =
+  | { type: "text"; text?: string }
+  | { type: "image"; url?: string; detail?: "high" | "original" }
+  | { type: "skill"; id?: string; label?: string; value?: string; executable?: boolean; options?: Record<string, unknown> };
 type ActiveRun = { runId: string; controller: AbortController };
 type PendingApproval = {
   runId: string;
@@ -230,6 +234,7 @@ async function sendMessage(request: http.IncomingMessage, response: http.ServerR
   if (!content) return json(response, 400, { error: errorPayload(ERROR_CODES.BAD_REQUEST, "content is required") });
 
   const runId = String(body.runId || makeId("run"));
+  const inputItems = Array.isArray(body.input) ? body.input as IncomingAgentInputItem[] : undefined;
   const shouldRenameTitle = detail.messages.length === 0;
   const message: Message = {
     id: makeId("msg"),
@@ -267,6 +272,7 @@ async function sendMessage(request: http.IncomingMessage, response: http.ServerR
         sessionId,
         runId,
         content,
+        inputItems,
         [...detail.messages, message],
         detail.events,
         detail.session.workspacePath,
@@ -310,6 +316,7 @@ async function sendMessageLegacyAgent(
     sessionId,
     runId,
     content,
+    undefined,
     [...detail.messages, message],
     detail.events,
     detail.session.workspacePath,
@@ -385,6 +392,7 @@ async function runAgentWithProvider(
   sessionId: string,
   runId: string,
   content: string,
+  inputItems: IncomingAgentInputItem[] | undefined,
   history: Message[],
   activity: Array<{ id: string; type: string; sessionId: string; runId?: string; messageId?: string; timestamp: string; payload: Record<string, unknown> }>,
   workspacePath: string,
@@ -417,6 +425,7 @@ async function runAgentWithProvider(
   try {
     const result = await executeAgentRuntime({
       content,
+      inputItems,
       history: history.map((message) => ({
         role: message.role,
         content: message.content,

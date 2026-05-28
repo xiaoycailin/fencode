@@ -77,9 +77,13 @@ Status: foundation implemented for Codex-like lifecycle events.
 - Runtime sekarang menerima:
   - history message sesi terakhir
   - recent activity/event sesi terakhir
+  - input multimodal turn aktif (`text` + `image`) langsung ke provider, tidak cuma markdown/base64 di history
   - runtime notes saat run mulai
   - memory context dari `~/.fencode/memories` kalau `features.memories=true`
 - Tujuan utama: pertanyaan referensial seperti "aku tadi tanya apa ya?" atau follow-up ambigu tetap punya konteks percakapan dan aktivitas terakhir, bukan jawab dari pesan tunggal.
+- Catatan penting:
+  - image paste/upload harus lewat `body.input[]` sampai ke provider sebagai `input_image` / `image_url`
+  - kalau cuma mengandalkan `message.content` history, base64 panjang bisa terpotong oleh summarizer/truncation context
 
 ## Personalization And Memory
 - `personality` di `~/.fencode/config.json` sekarang masuk ke runtime instructions:

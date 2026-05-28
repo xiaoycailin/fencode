@@ -11,6 +11,11 @@ import { resolveFencodeHome } from "./runtimeHome.js";
 
 type RuntimeInput = {
   content: string;
+  inputItems?: Array<
+    | { type: "text"; text?: string }
+    | { type: "image"; url?: string; detail?: "high" | "original" }
+    | { type: "skill"; id?: string; label?: string; value?: string; executable?: boolean; options?: Record<string, unknown> }
+  >;
   history?: Array<{ role: "user" | "assistant" | "system"; content: string; createdAt?: string }>;
   activity?: AgentEvent[];
   workspacePath: string;
@@ -31,7 +36,7 @@ export type RuntimeResult = {
 const MAX_STEPS = 10;
 
 export async function executeAgentRuntime(input: RuntimeInput) {
-  const { content, history = [], activity = [], workspacePath, model, permission, signal, sink } = input;
+  const { content, inputItems = [], history = [], activity = [], workspacePath, model, permission, signal, sink } = input;
   sink.publish("thinking.start", { message: "Starting fcode-server run" });
   sink.publish("thinking.delta", { message: `Workspace: ${workspacePath}` });
   sink.publish("thinking.delta", { message: `Permission: ${permission}` });
@@ -63,6 +68,7 @@ export async function executeAgentRuntime(input: RuntimeInput) {
       const modelReply = await callProvider({
         model,
         userText: renderLoopPrompt(transcript),
+        sourceInput: inputItems,
         instructions: `${baseInstructions}\n${toolContract()}`,
         signal,
       });
@@ -361,6 +367,7 @@ function summarizeEventPayload(type: string, payload: Record<string, unknown>) {
 type ProviderCallInput = {
   model: string;
   userText: string;
+  sourceInput?: RuntimeInput["inputItems"];
   instructions: string;
   signal: AbortSignal;
 };
@@ -387,7 +394,7 @@ async function callProvider(input: ProviderCallInput) {
     const timeoutSignal = AbortSignal.timeout(PROVIDER_TIMEOUT_MS);
     const combinedSignal = AbortSignal.any([input.signal, timeoutSignal]);
     if ((runtime.provider.wireApi || "").toLowerCase() === "responses") {
-      const value = await callResponsesApi(baseUrl, apiKey, auth.accountId, input.model, input.userText, input.instructions, combinedSignal).catch((error) => {
+      const value = await callResponsesApi(baseUrl, apiKey, auth.accountId, input.model, input.userText, input.sourceInput, input.instructions, combinedSignal).catch((error) => {
         const message = error instanceof Error ? error.message : String(error || "");
         errors.push(message || "responses failed");
         if (shouldForceRefresh(error) && auth.mode === "oauth" && forceRefreshOauthToken()) return "";
@@ -399,7 +406,7 @@ async function callProvider(input: ProviderCallInput) {
       if (attempt >= PROVIDER_MAX_RETRIES) break;
       continue;
     }
-    const fallback = await callChatCompletionsApi(baseUrl, apiKey, auth.accountId, input.model, input.userText, input.instructions, combinedSignal).catch((error) => {
+    const fallback = await callChatCompletionsApi(baseUrl, apiKey, auth.accountId, input.model, input.userText, input.sourceInput, input.instructions, combinedSignal).catch((error) => {
       const message = error instanceof Error ? error.message : String(error || "");
       errors.push(message || "chat/completions failed");
       if (shouldForceRefresh(error) && auth.mode === "oauth" && forceRefreshOauthToken()) return "";
@@ -417,7 +424,7 @@ function shouldForceRefresh(error: unknown) {
   return /\b(401|403)\b/.test(message);
 }
 
-async function callResponsesApi(baseUrl: string, apiKey: string, accountId: string | undefined, model: string, userText: string, instructions: string, signal: AbortSignal) {
+async function callResponsesApi(baseUrl: string, apiKey: string, accountId: string | undefined, model: string, userText: string, sourceInput: RuntimeInput["inputItems"], instructions: string, signal: AbortSignal) {
   const compatHeaders = buildProviderCompatHeaders(accountId);
   const response = await fetch(`${baseUrl}/responses`, {
     method: "POST",
@@ -432,7 +439,7 @@ async function callResponsesApi(baseUrl: string, apiKey: string, accountId: stri
       store: false,
       stream: true,
       instructions,
-      input: [{ role: "user", content: [{ type: "input_text", text: userText }] }],
+      input: [{ role: "user", content: buildResponsesUserContent(userText, sourceInput) }],
     }),
   });
   if (!response.ok) {
@@ -442,7 +449,7 @@ async function callResponsesApi(baseUrl: string, apiKey: string, accountId: stri
   return readResponsesOutput(response);
 }
 
-async function callChatCompletionsApi(baseUrl: string, apiKey: string, accountId: string | undefined, model: string, userText: string, instructions: string, signal: AbortSignal) {
+async function callChatCompletionsApi(baseUrl: string, apiKey: string, accountId: string | undefined, model: string, userText: string, sourceInput: RuntimeInput["inputItems"], instructions: string, signal: AbortSignal) {
   const compatHeaders = buildProviderCompatHeaders(accountId);
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
@@ -454,7 +461,7 @@ async function callChatCompletionsApi(baseUrl: string, apiKey: string, accountId
     },
     body: JSON.stringify({
       model,
-      messages: [{ role: "system", content: instructions }, { role: "user", content: userText }],
+      messages: [{ role: "system", content: instructions }, { role: "user", content: buildChatUserContent(userText, sourceInput) }],
       stream: false,
     }),
   });
@@ -464,6 +471,40 @@ async function callChatCompletionsApi(baseUrl: string, apiKey: string, accountId
   }
   const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
   return payload.choices?.[0]?.message?.content?.trim() || "";
+}
+
+function buildResponsesUserContent(userText: string, sourceInput: RuntimeInput["inputItems"] = []) {
+  const blocks: Array<Record<string, unknown>> = [];
+  for (const item of sourceInput) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type === "text" && item.text?.trim()) {
+      blocks.push({ type: "input_text", text: item.text });
+      continue;
+    }
+    if (item.type === "image" && item.url?.trim()) {
+      blocks.push({ type: "input_image", image_url: item.url, detail: item.detail || "high" });
+    }
+  }
+  if (!blocks.length) blocks.push({ type: "input_text", text: userText });
+  else if (!blocks.some((item) => item.type === "input_text")) blocks.unshift({ type: "input_text", text: userText });
+  return blocks;
+}
+
+function buildChatUserContent(userText: string, sourceInput: RuntimeInput["inputItems"] = []) {
+  const blocks: Array<Record<string, unknown>> = [];
+  for (const item of sourceInput) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type === "text" && item.text?.trim()) {
+      blocks.push({ type: "text", text: item.text });
+      continue;
+    }
+    if (item.type === "image" && item.url?.trim()) {
+      blocks.push({ type: "image_url", image_url: { url: item.url, detail: item.detail || "high" } });
+    }
+  }
+  if (!blocks.length) return userText;
+  if (!blocks.some((item) => item.type === "text")) blocks.unshift({ type: "text", text: userText });
+  return blocks;
 }
 
 function safeError(text: string) {
